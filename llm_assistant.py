@@ -6,7 +6,7 @@ from pathlib import Path
 
 class LLMPromptAssistant:
     def __init__(self):
-        self.ollama_host = "http://192.168.10.111:11434"
+        self.ollama_host = "http://127.0.0.1:11434"
         self.template_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), "templates")
         os.makedirs(self.template_dir, exist_ok=True)
         
@@ -26,7 +26,7 @@ class LLMPromptAssistant:
             "required": {
                 "text": ("STRING", {"multiline": True}),
                 "ollama_host": ("STRING", {
-                    "default": "http://192.168.10.111:11434",
+                    "default": "http://127.0.0.1:11434",
                     "multiline": False
                 }),
                 "model": (cls.list_models(), ),  # 注意这里添加了()
@@ -42,7 +42,7 @@ class LLMPromptAssistant:
     @classmethod
     def list_models(cls):
         try:
-            response = requests.get("http://192.168.10.111:11434/api/tags")
+            response = requests.get("http://127.0.0.1:11434/api/tags")
             if response.status_code == 200:
                 models = response.json()
                 return [model['name'] for model in models['models']]
