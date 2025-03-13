@@ -1,0 +1,20 @@
+Please analyze the text and generate detailed tags for CLIP text encoders (ViT-L/14, ViT-L, ViT-G) in ComfyUI format.
+
+Requirements:
+- Start with main subjects and their attributes (character, object, scene)
+- Describe actions, poses, expressions, and interactions
+- Include material details, textures, and surface qualities
+- Specify lighting conditions, time of day, atmosphere
+- Add camera angles, shot types, composition elements
+- Include art style, rendering technique, artistic influences
+- End with quality boosters and technical preferences
+
+Formatting rules:
+- Use clear, simple English words that CLIP models understand
+- Separate elements with commas
+- Weight important elements (1.1-1.4), critical elements (1.5)
+- Add quality tags: best quality, masterpiece, highly detailed
+- Format: basic_element, (important_element:1.2), (critical_element:1.5)
+
+Input text:
+{text}

@@ -4,40 +4,48 @@ import json
 import requests
 from pathlib import Path
 
-class APIPromptAssistant:
+class OllamaPromptAssistant:
     def __init__(self):
-        self.config_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "api_config.json")
+        self.config_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "ollama_config.json")
         self.load_config()
-    
+        os.makedirs(self.template_dir, exist_ok=True)
+        
     def load_config(self):
-        """加载API配置"""
+        """加载Ollama配置"""
         try:
             with open(self.config_path, 'r', encoding='utf-8') as f:
-                self.config = json.load(f)
+                config = json.load(f)
+                self.ollama_host = config['ollama_host']
+                self.template_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), config['template_dir'])
         except FileNotFoundError:
-            print(f"错误：配置文件不存在 - {self.config_path}")
+            print(f"[Error] 配置文件不存在: {self.config_path}")
             raise
         except json.JSONDecodeError as e:
-            print(f"错误：配置文件格式无效 - {str(e)}")
+            print(f"[Error] 配置文件格式无效: {str(e)}")
+            raise
+        except KeyError as e:
+            print(f"[Error] 配置文件缺少必要字段: {str(e)}")
             raise
         except Exception as e:
-            print(f"错误：加载配置文件失败 - {str(e)}")
+            print(f"[Error] 加载配置文件失败: {str(e)}")
             raise
-    
-    def load_tags_config(self):
-        """加载标签配置"""
+        
+    def read_template(self, template_name):
+        """读取模板文件"""
+        template_path = os.path.join(self.template_dir, template_name)
         try:
-            with open(self.tags_path, 'r', encoding='utf-8') as f:
-                self.tags_config = json.load(f)
+            with open(template_path, "r", encoding="utf-8") as f:
+                return f.read()
         except Exception as e:
-            print(f"[Error] 加载标签配置失败: {str(e)}")
-            self.tags_config = {"quality_tags": [], "style_mappings": {}}
-    
+            print(f"Error reading template {template_name}: {str(e)}")
+            return None
+        
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
                 "text": ("STRING", {"multiline": True}),
+                "model": (cls.list_models(), ),  # 注意这里添加了()
                 "prompt_expansion": ("BOOLEAN", {"default": False}),
             }
         }
@@ -47,51 +55,28 @@ class APIPromptAssistant:
     FUNCTION = "process_prompt"
     CATEGORY = "LLM-Assistant"
 
-    def call_api(self, prompt):
-        """调用API获取响应"""
+    @classmethod
+    def list_models(cls):
         try:
-            if not self.config['api_key']:
-                raise ValueError("API密钥未配置")
-                
-            headers = {
-                "Authorization": f"Bearer {self.config['api_key']}",
-                "Content-Type": "application/json"
-            }
-            
-            request_data = {
-                "model": self.config['api_model'],
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": self.config['api_temperature'],
-                "max_tokens": self.config['api_max_tokens']
-            }
-            
-            print(f"[API] 发送请求到: {self.config['api_base']}，使用模型: {self.config['api_model']}")
-            
-            response = requests.post(
-                f"{self.config['api_base']}/chat/completions",
-                headers=headers,
-                json=request_data
-            )
-            
-            if response.status_code != 200:
-                raise Exception(f"API请求失败: {response.status_code} - {response.text}")
-                
-            response_data = response.json()
-            return response_data['choices'][0]['message']['content'].strip()
-            
-        except Exception as e:
-            print(f"[Error] API调用失败: {str(e)}")
-            raise
-    
-    def process_prompt(self, text, prompt_expansion):
+            # 创建一个临时实例来获取配置
+            instance = cls()
+            response = requests.get(f"{instance.ollama_host}/api/tags")
+            if response.status_code == 200:
+                models = response.json()
+                return [model['name'] for model in models['models']]
+        except:
+            pass
+        return ["llama2"]  # 默认返回值
+
+    def process_prompt(self, text, model, prompt_expansion):
         if prompt_expansion:
-            optimized = self.expansion_prompt(text)
+            optimized = self.expansion_prompt(text, model)
             expansion_text = self.extract_expansion_text(optimized)
-            translated = self.translate_text(expansion_text)
+            translated = self.translate_text(expansion_text, model)
             
             # 根据是否存在think标签决定输出格式
             think_match = re.search(r'<think>(.*?)</think>', optimized, re.DOTALL)
-            if (think_match):
+            if think_match:
                 preview_prompt = (
                     f"原文：\n{text}\n\n"
                     f"{think_match.group(0)}\n\n"
@@ -104,42 +89,51 @@ class APIPromptAssistant:
                     f"优化后的提示词：\n{expansion_text}\n\n"
                     f"译文：\n{translated}"
                 )
-            weighted = self.generate_tagger_prompt(translated)
+            weighted = self.generate_tagger_prompt(translated, model)
         else:
-            translated = self.translate_text(text)
+            translated = self.translate_text(text, model)
             preview_prompt = f"原文：\n{text}\n\n译文：\n{translated}"
-            weighted = self.generate_tagger_prompt(translated)
+            weighted = self.generate_tagger_prompt(translated, model)
         
         return (preview_prompt, translated, weighted)
 
-    def expansion_prompt(self, text):
+    def expansion_prompt(self, text, model):
         template = self.read_template("expansion_template.txt")
         if not template:
             return text
             
-        response = self.call_api(template.format(text=text))
+        response = self.call_ollama(template.format(text=text), model)
         return response.strip()
 
-    def translate_text(self, text):
+    def translate_text(self, text, model):
         template = self.read_template("translation_template.txt")
         if not template:
+            print("[Error] 无法读取翻译模板文件")
             return text
         
+        # 确保文本不为空
         if not text.strip():
             return ""
             
-        response = self.call_api(template.format(text=text))
-        return self.clean_translation(response)
+        try:
+            response = self.call_ollama(template.format(text=text), model)
+            return self.clean_translation(response)
+        except Exception as e:
+            print(f"[Error] 翻译过程中发生错误: {str(e)}")
+            return text
 
     def clean_translation(self, text):
         """清理翻译结果"""
+        # 移除所有中文字符
         text = re.sub(r'[\u4e00-\u9fff]', '', text)
         
+        # 移除无关内容
         text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
         text = re.sub(r'(?i)translation:.*?text:', '', text, flags=re.DOTALL)
         text = re.sub(r'```.*?```', '', text, flags=re.DOTALL)
         text = re.sub(r'Scene Description:', '', text, flags=re.IGNORECASE)
         
+        # 清理常见前缀
         prefixes = [
             "here's the translation:",
             "translated text:",
@@ -156,19 +150,25 @@ class APIPromptAssistant:
             if result.lower().startswith(prefix.lower()):
                 result = result[len(prefix):].strip()
         
+        # 清理格式
         result = ' '.join(result.split())
-        result = re.sub(r'\s+([,.!?])', r'\1', result)
+        result = re.sub(r'\s+([,.!?])', r'\1', result)  # 修复标点符号前的空格
         
         return result.strip()
 
     def extract_expansion_text(self, text):
         """从优化结果中提取提示词"""
+        # 移除think标签及其内容
         text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
+        
+        # 移除所有方括号标记及其内容
         text = re.sub(r'\[.*?\]', '', text, flags=re.DOTALL)
         
+        # 提取"优化后的提示词："后面的内容
         match = re.search(r'优化后的提示词：\s*(.*?)(?:\n\n译文：|$)', text, re.DOTALL)
         if match:
             result = match.group(1).strip()
+            # 移除开头可能的逗号和场景描述等标记
             result = re.sub(r'^[,，]', '', result)
             result = re.sub(r'(场景描述：|分析：|建议：)', '', result)
             return result.strip()
@@ -177,21 +177,35 @@ class APIPromptAssistant:
 
     def extract_prompt(self, text):
         """提取提示词内容，去除思考过程"""
+        # 移除think标签及其内容，保留其他部分
         parts = re.split(r'<think>.*?</think>', text, flags=re.DOTALL)
+        # 保留非空的部分
         filtered = [part.strip() for part in parts if part.strip()]
+        # 如果没有有效内容，返回空字符串
         return filtered[-1] if filtered else ""
 
-    def read_template(self, template_name):
-        """读取模板文件"""
-        template_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "templates", template_name)
+    def call_ollama(self, prompt, model):
         try:
-            with open(template_path, "r", encoding="utf-8") as f:
-                return f.read()
+            response = requests.post(
+                f"{self.ollama_host}/api/generate",
+                json={
+                    "model": model,
+                    "prompt": prompt,
+                    "stream": False
+                }
+            )
+            
+            if response.status_code != 200:
+                raise Exception(f"Ollama API请求失败: {response.status_code} - {response.text}")
+                
+            response_data = response.json()
+            return response_data['response']
+                
         except Exception as e:
-            print(f"Error reading template {template_name}: {str(e)}")
-            return None
+            print(f"[Error] 调用Ollama API时发生错误: {str(e)}")
+            raise
 
-    def generate_tagger_prompt(self, text):
+    def generate_tagger_prompt(self, text, model):
         """生成符合CLIP模型理解的提示词"""
         if not text.strip():
             return ""
@@ -201,7 +215,7 @@ class APIPromptAssistant:
             return ""
             
         try:
-            response = self.call_api(template.format(text=text))
+            response = self.call_ollama(template.format(text=text), model)
             
             # 移除思考过程
             response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL)

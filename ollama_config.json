@@ -1,0 +1,4 @@
+{
+    "ollama_host": "http://127.0.0.1:11434",
+    "template_dir": "templates"
+}
